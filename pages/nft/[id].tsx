@@ -1,22 +1,112 @@
-import React from 'react'
-import { useAddress, useDisconnect, useMetamask } from "@thirdweb-dev/react";
+import React, { useEffect, useState } from 'react'
+import { useAddress, useDisconnect, useMetamask , useNFTDrop} from "@thirdweb-dev/react";
 import { GetServerSideProps } from 'next';
 import { sanityClient, urlFor } from '../../sanity';
 import { Collection } from '../../typings';
 import Link from 'next/link';
+import { BigNumber } from 'ethers';
+import toast, { Toaster } from 'react-hot-toast';
 
 interface Props{
     collection:Collection,
 }
 
 function NFTDropPage({collection}: Props) {
+  const [claimedSupply, setClaimedSupply] = useState<number>(0)
+  const [totalSupply,setTotalSupply] = useState<BigNumber>()
+  const [loading, setLoading] = useState<boolean>(true)
+  const [priceInEth,setPriceInEth] = useState<string>()
   //Authetications
   const connectWithMetaMask = useMetamask();  
   const address = useAddress();
-  const disconnect = useDisconnect()
-  console.log(address);
+  const disconnect = useDisconnect();
+  //   load the nftdrop available in your third web
+  const nFTDrop = useNFTDrop(collection.address)
+
+  console.log(collection.address, "address")
+ 
+  useEffect(() => {
+    if(!nFTDrop) return
+    const fetchPrice = async() => {
+      const claimConditions = await nFTDrop.claimConditions.getAll();
+      setPriceInEth(claimConditions?.[0].currencyMetadata.displayValue)
+
+    }
+    fetchPrice()
+
+  },[nFTDrop])
+
+  useEffect(() => {
+    if (!nFTDrop) return
+
+    const fetchNFTDropData = async () => {
+      setLoading(true)
+      const claimed = await nFTDrop.getAllClaimed()
+      const total = await nFTDrop.totalSupply()
+
+      setClaimedSupply(claimed.length)
+      setTotalSupply(total)
+      setLoading(false)
+    }
+
+    fetchNFTDropData()
+  }, [nFTDrop])
+   
+   //mint function
+   const mintNFT = () => {
+     if(!nFTDrop || !address) return;
+
+     const quantity = 1; //how many unoque NFT's you want to claim
+    
+     setLoading(true);
+     const notification  = toast.loading('Minting...', {
+      style: {
+        background: 'white',
+        color: 'green',
+        fontWeight: 'bolder',
+        fontSize: '17px',
+        padding: '20px',
+      },
+     })
+
+     nFTDrop.claimTo(address, quantity).then(async (tx) => {
+      const receipt = tx[0].receipt
+      const claimedTokenId = tx[0].id
+      const claimedNFT = await tx[0].data()
+     
+      toast('YAY, You successfully minted your NFT!', {
+        duration: 8000,
+        style: {
+          background: 'white',
+          color: 'green',
+          fontWeight: 'bolder',
+          fontSize: '17px',
+          padding: '20px',
+        },
+      })
+      console.log(receipt)
+      console.log(claimedTokenId)
+      console.log(claimedNFT)
+     }).catch(err => {
+      console.log(err)
+      toast('Whoops... something went wrong', {
+        style: {
+          background: 'red',
+          color: 'white',
+          fontWeight: 'bolder',
+          fontSize: '17px',
+          padding: '20px',
+        },
+      })
+    }).finally(() => {
+      setLoading(false)
+      toast.dismiss(notification)
+    })
+     
+   }
   return (
     <div className="flex flex-col h-screen lg:grid lg:grid-cols-10">
+      <Toaster position='bottom-center' />
       {/* left  */}
       <div className="bg-gradient-to-br from-black to-purple-400 lg:col-span-4">
           <div className="flex flex-col items-center justify-center py-2 lg:min-h-screen"> 
@@ -59,16 +149,41 @@ function NFTDropPage({collection}: Props) {
           <div className="flex flex-col items-center flex-1 mt-10 space-y-6 lg:space-y-0 lg:justify-center">
               <img className="object-cover pb-10 w-80 lg:h-50 lg:w-96" src={urlFor(collection.mainImage).url()} alt="" />
               <h1 className="text-3xl font-bold lg:text-5xl lg:font-extrabold">{collection.title}</h1>
-              <p className="p-2 text-xl text-blue-500">
-                  13 / 21 NFT's claimed
-              </p>
+              
+              {loading ? (
+                <p className="p-2 text-xl text-blue-500 animate-pulse">
+                  Loading Supply Count....
+                </p>
+              ) : (
+                <p className="p-2 text-xl text-blue-500">
+                    {claimedSupply} / {totalSupply?.toString()} NFT's claimed
+                </p>
+
+              )}
+
+              {loading && (
+                  <img className="object-contain h-50 w-80" src="https://cdn.hackernoon.com/images/0*4Gzjgh9Y7Gu8KEtZ.gif" alt="" />
+              )}
               
           </div>
           
 
           {/* Mint button */}
-          <button  className="w-full h-16 mt-10 font-bold text-white bg-purple-500 rounded-full">
-              Mint NFT (0.01 ETH)
+          <button  
+          onClick={mintNFT}
+          disabled={loading || claimedSupply === totalSupply?.toNumber() || !address} 
+           className="w-full h-16 mt-10 font-bold text-white bg-purple-500 rounded-full cursor-pointer disabled:bg-gray-400">
+              {loading ? (
+                <>Loading</>
+              ) : claimedSupply === totalSupply?.toNumber() ? (
+                <>SOLD OUT</>
+
+              ): !address ? (
+                <>Sign In to Mint</>
+              ):(
+                <span>Mint NFT ({priceInEth} ETH)</span>
+              )}
+              
           </button>
       </div>
     </div>
@@ -78,29 +193,30 @@ function NFTDropPage({collection}: Props) {
 export default NFTDropPage;
 
 export const getServerSideProps: GetServerSideProps = async ({params}) => {
-    const query = `*[_type == "collection" && slug.current == $id][0]{
-        _id,
-        title,
-        description,
-        nftCollectionName,
-        mainImage {
-        asset
-      },
-      previewImage {
-        asset
-      },
-      slug {
-        current
-      },
-      creator-> {
-        _id,
-        name,
-        address,
-        slug {
-        current
-      },
-      },
-    }`
+  const query = `*[_type == "collection" && slug.current == $id][0]{
+    _id,
+    title,
+    description,
+    nftCollectionName,
+    address,
+    mainImage {
+    asset
+  },
+  previewImage {
+    asset
+  },
+  slug {
+    current
+  },
+  creator-> {
+    _id,
+    name,
+    address,
+    slug {
+    current
+  },
+  },
+  }`
 
     const collection = await sanityClient.fetch(query, {
         id: params?.id
